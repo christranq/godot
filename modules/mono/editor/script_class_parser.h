@@ -72,7 +72,10 @@ private:
 		TK_BRACKET_CLOSE,
 		TK_CURLY_BRACKET_OPEN,
 		TK_CURLY_BRACKET_CLOSE,
+		TK_PARENS_OPEN,
+		TK_PARENS_CLOSE,
 		TK_PERIOD,
+		TK_QUESTION,
 		TK_COLON,
 		TK_COMMA,
 		TK_SYMBOL,
@@ -92,6 +95,7 @@ private:
 	Token get_token();
 
 	Error _skip_generic_type_params();
+	Error _skip_tuple_type_params();
 
 	Error _parse_type_full_name(String &r_full_name);
 	Error _parse_class_base(Vector<String> &r_base);

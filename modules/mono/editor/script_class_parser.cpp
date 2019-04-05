@@ -40,7 +40,10 @@ const char *ScriptClassParser::token_names[ScriptClassParser::TK_MAX] = {
 	"]",
 	"{",
 	"}",
+	"(",
+	")",
 	".",
+	"?",
 	":",
 	",",
 	"Symbol",
@@ -87,6 +90,14 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 				idx++;
 				return TK_BRACKET_CLOSE;
 			};
+			case '(': {
+				idx++;
+				return TK_PARENS_OPEN;
+			};
+			case ')': {
+				idx++;
+				return TK_PARENS_CLOSE;
+			};
 			case '<': {
 				idx++;
 				return TK_OP_LESS;
@@ -107,6 +118,10 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 				idx++;
 				return TK_PERIOD;
 			};
+			case '?': {
+				idx++;
+				return TK_QUESTION;
+			};
 			case '#': {
 				//compiler directive
 				while (code[idx] != '\n' && code[idx] != 0) {
@@ -120,7 +135,7 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 						idx += 2;
 						while (true) {
 							if (code[idx] == 0) {
-								error_str = "Unterminated comment";
+								error_str = "Line: " + String::num_int64(line) + " - Unterminated comment";
 								error = true;
 								return TK_ERROR;
 							} else if (code[idx] == '*' && code[idx + 1] == '/') {
@@ -158,7 +173,7 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 				String tk_string = String();
 				while (true) {
 					if (code[idx] == 0) {
-						error_str = "Unterminated String";
+						error_str = "Line: " + String::num_int64(line) + " - Unterminated String";
 						error = true;
 						return TK_ERROR;
 					} else if (code[idx] == begin_str) {
@@ -174,7 +189,7 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 						idx++;
 						CharType next = code[idx];
 						if (next == 0) {
-							error_str = "Unterminated String";
+							error_str = "Line: " + String::num_int64(line) + " - Unterminated String";
 							error = true;
 							return TK_ERROR;
 						}
@@ -217,7 +232,7 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 					break;
 				}
 
-				if ((code[idx] >= 33 && code[idx] <= 47) || (code[idx] >= 58 && code[idx] <= 63) || (code[idx] >= 91 && code[idx] <= 94) || code[idx] == 96 || (code[idx] >= 123 && code[idx] <= 127)) {
+				if ((code[idx] >= 33 && code[idx] <= 39) || (code[idx] >= 42 && code[idx] <= 47) || (code[idx] >= 58 && code[idx] <= 62) || (code[idx] >= 91 && code[idx] <= 94) || code[idx] == 96 || (code[idx] >= 123 && code[idx] <= 127)) {
 					value = String::chr(code[idx]);
 					idx++;
 					return TK_SYMBOL;
@@ -248,7 +263,7 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 					// begin of verbatim string
 					idx++;
 				} else {
-					error_str = "Unexpected character.";
+					error_str = "Line: " + String::num_int64(line) + " - Unexpected character.";
 					error = true;
 					return TK_ERROR;
 				}
@@ -264,63 +279,132 @@ Error ScriptClassParser::_skip_generic_type_params() {
 	while (true) {
 		tk = get_token();
 
-		if (tk == TK_IDENTIFIER) {
+		// Parses type first:
+
+		// Type could be a tuple type and start with a parens
+		if (tk == TK_PARENS_OPEN) {
+			Error err = _skip_tuple_type_params();
+			if (err)
+				return err;
+			continue;
+		} else if (tk == TK_IDENTIFIER) { // Could be a regular type
 			tk = get_token();
-			// Type specifications can end with "?" to denote nullable types, such as IList<int?>
-			if (tk == TK_SYMBOL) {
+
+			// Could be a type from another namespace/class
+			while (tk == TK_PERIOD) {
+
+				// Should be another namespace/class
 				tk = get_token();
-				if (value.operator String() != "?") {
-					error_str = "Expected " + get_token_name(TK_IDENTIFIER) + ", found unexpected symbol '" + value + "'";
+
+				if (tk != TK_IDENTIFIER) {
+					error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
 					error = true;
 					return ERR_PARSE_ERROR;
 				}
-				if (tk != TK_OP_GREATER && tk != TK_COMMA) {
-					error_str = "Nullable type symbol '?' is only allowed after an identifier, but found " + get_token_name(tk) + " next.";
-					error = true;
-					return ERR_PARSE_ERROR;
-				}
+
+				tk = get_token();
 			}
 
-			if (tk == TK_PERIOD) {
-				while (true) {
-					tk = get_token();
-
-					if (tk != TK_IDENTIFIER) {
-						error_str = "Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
-						error = true;
-						return ERR_PARSE_ERROR;
-					}
-
-					tk = get_token();
-
-					if (tk != TK_PERIOD)
-						break;
-				}
-			}
-
+			// Type could be a generic type, such as IList<int>
 			if (tk == TK_OP_LESS) {
 				Error err = _skip_generic_type_params();
 				if (err)
 					return err;
 				continue;
-			} else if (tk == TK_OP_GREATER) {
-				return OK;
-			} else if (tk != TK_COMMA) {
-				error_str = "Unexpected token: " + get_token_name(tk);
-				error = true;
-				return ERR_PARSE_ERROR;
 			}
-		} else if (tk == TK_OP_LESS) {
-			error_str = "Expected " + get_token_name(TK_IDENTIFIER) + ", found " + get_token_name(TK_OP_LESS);
-			error = true;
-			return ERR_PARSE_ERROR;
-		} else if (tk == TK_OP_GREATER) {
-			return OK;
-		} else {
-			error_str = "Unexpected token: " + get_token_name(tk);
-			error = true;
-			return ERR_PARSE_ERROR;
+
+			// Type specifications can end with "?" to denote nullable types, such as int?
+			if (tk == TK_QUESTION) {
+				tk = get_token();
+			}
 		}
+
+		// Type is parsed now.
+		if (tk == TK_OP_GREATER) {
+			return OK;
+		} else if (tk == TK_COMMA) {
+			// This is okay, but we're still looking for the end of this generic type, so continue on
+		} else {
+			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
+			error = true;
+			return ERR_PARSE_ERROR;
+		} 
+	}
+}
+
+Error ScriptClassParser::_skip_tuple_type_params() {
+
+	Token tk;
+
+	while (true) {
+		tk = get_token();
+
+		// Parses type first:
+
+		// Type could be a tuple type and start with a parens
+		if (tk == TK_PARENS_OPEN) {
+			Error err = _skip_tuple_type_params();
+			if (err)
+				return err;
+			continue;
+		} else if (tk == TK_IDENTIFIER) { // Could be a regular type
+			tk = get_token();
+
+			// Could be a type from another namespace/class
+			while (tk == TK_PERIOD) {
+
+				// Should be another namespace/class
+				tk = get_token();
+
+				if (tk != TK_IDENTIFIER) {
+					error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
+					error = true;
+					return ERR_PARSE_ERROR;
+				}
+
+				tk = get_token();
+			}
+
+			// Type could be a generic type, such as IList<int>
+			if (tk == TK_OP_LESS) {
+				Error err = _skip_generic_type_params();
+				if (err)
+					return err;
+				continue;
+			}
+
+			// Type specifications can end with "?" to denote nullable types, such as int?
+			if (tk == TK_QUESTION) {
+				tk = get_token();
+			}
+
+			// After the type, you can give the tuple a name, such as (int? a, int b)
+			if (tk == TK_IDENTIFIER) {
+				tk = get_token();
+			}
+		}
+
+		// Type is parsed now.
+
+		if (tk == TK_PARENS_OPEN) {
+			Error err = _skip_tuple_type_params();
+			if (err)
+				return err;
+			continue;
+		} else if (tk == TK_OP_LESS) {
+			Error err = _skip_generic_type_params();
+			if (err)
+				return err;
+			continue;
+		} else if (tk == TK_PARENS_CLOSE) {
+			return OK;
+		} else if (tk == TK_COMMA) {
+			continue;
+		} else {
+			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
+			error = true;
+			return ERR_PARSE_ERROR;
+		} 
 	}
 }
 
@@ -329,7 +413,7 @@ Error ScriptClassParser::_parse_type_full_name(String &r_full_name) {
 	Token tk = get_token();
 
 	if (tk != TK_IDENTIFIER) {
-		error_str = "Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
@@ -381,7 +465,7 @@ Error ScriptClassParser::_parse_class_base(Vector<String> &r_base) {
 	} else if (tk == TK_CURLY_BRACKET_OPEN) {
 		// we are finished when we hit the open curly bracket
 	} else {
-		error_str = "Unexpected token: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
@@ -394,14 +478,14 @@ Error ScriptClassParser::_parse_class_base(Vector<String> &r_base) {
 Error ScriptClassParser::_parse_type_constraints() {
 	Token tk = get_token();
 	if (tk != TK_IDENTIFIER) {
-		error_str = "Unexpected token: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
 
 	tk = get_token();
 	if (tk != TK_COLON) {
-		error_str = "Unexpected token: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
@@ -414,21 +498,16 @@ Error ScriptClassParser::_parse_type_constraints() {
 			}
 
 			tk = get_token();
-			if (tk == TK_PERIOD) {
-				while (true) {
-					tk = get_token();
+			while (tk == TK_PERIOD) {
+				tk = get_token();
 
-					if (tk != TK_IDENTIFIER) {
-						error_str = "Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
-						error = true;
-						return ERR_PARSE_ERROR;
-					}
-
-					tk = get_token();
-
-					if (tk != TK_PERIOD)
-						break;
+				if (tk != TK_IDENTIFIER) {
+					error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
+					error = true;
+					return ERR_PARSE_ERROR;
 				}
+
+				tk = get_token();
 			}
 		}
 
@@ -436,10 +515,10 @@ Error ScriptClassParser::_parse_type_constraints() {
 			continue;
 		} else if (tk == TK_IDENTIFIER && String(value) == "where") {
 			return _parse_type_constraints();
-		} else if (tk == TK_SYMBOL && String(value) == "(") {
+		} else if (tk == TK_PARENS_OPEN) {
 			tk = get_token();
-			if (tk != TK_SYMBOL || String(value) != ")") {
-				error_str = "Unexpected token: " + get_token_name(tk);
+			if (tk != TK_PARENS_CLOSE) {
+				error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 				error = true;
 				return ERR_PARSE_ERROR;
 			}
@@ -450,7 +529,7 @@ Error ScriptClassParser::_parse_type_constraints() {
 		} else if (tk == TK_CURLY_BRACKET_OPEN) {
 			return OK;
 		} else {
-			error_str = "Unexpected token: " + get_token_name(tk);
+			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 			error = true;
 			return ERR_PARSE_ERROR;
 		}
@@ -464,7 +543,7 @@ Error ScriptClassParser::_parse_namespace_name(String &r_name, int &r_curly_stac
 	if (tk == TK_IDENTIFIER) {
 		r_name += String(value);
 	} else {
-		error_str = "Unexpected token: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
@@ -478,7 +557,7 @@ Error ScriptClassParser::_parse_namespace_name(String &r_name, int &r_curly_stac
 		r_curly_stack++;
 		return OK;
 	} else {
-		error_str = "Unexpected token: " + get_token_name(tk);
+		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 		error = true;
 		return ERR_PARSE_ERROR;
 	}
@@ -488,7 +567,7 @@ Error ScriptClassParser::parse(const String &p_code) {
 
 	code = p_code;
 	idx = 0;
-	line = 0;
+	line = 1;
 	error_str = String();
 	error = false;
 	value = Variant();
@@ -501,7 +580,24 @@ Error ScriptClassParser::parse(const String &p_code) {
 	int type_curly_stack = 0;
 
 	while (!error && tk != TK_EOF) {
-		if (tk == TK_IDENTIFIER && String(value) == "class") {
+		// It's possible to use "class" and "struct" as type constraints instead of type declarations, so consume those first
+		if (tk == TK_IDENTIFIER && String(value) == "where") {
+			// However, it's also possible that if we see a "where", it isn't a type constraint
+			int temp_idx = idx;
+			int temp_line = line;
+
+			Token tk1 = get_token();
+			Token tk2 = get_token();
+
+			idx = temp_idx;
+			line = temp_line;
+
+			if (tk1 == TK_IDENTIFIER && tk2 == TK_COLON) {
+				Error err = _parse_type_constraints();
+				if (err)
+					return err;
+			}
+		} else if (tk == TK_IDENTIFIER && String(value) == "class") {
 			tk = get_token();
 
 			if (tk == TK_IDENTIFIER) {
@@ -560,7 +656,7 @@ Error ScriptClassParser::parse(const String &p_code) {
 						type_curly_stack++;
 						break;
 					} else {
-						error_str = "Unexpected token: " + get_token_name(tk);
+						error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 						error = true;
 						return ERR_PARSE_ERROR;
 					}
@@ -590,7 +686,7 @@ Error ScriptClassParser::parse(const String &p_code) {
 					name = String(value);
 				} else if (tk == TK_CURLY_BRACKET_OPEN) {
 					if (name.empty()) {
-						error_str = "Expected " + get_token_name(TK_IDENTIFIER) + " after keyword `struct`, found " + get_token_name(TK_CURLY_BRACKET_OPEN);
+						error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + " after keyword `struct`, found " + get_token_name(TK_CURLY_BRACKET_OPEN);
 						error = true;
 						return ERR_PARSE_ERROR;
 					}
@@ -599,7 +695,7 @@ Error ScriptClassParser::parse(const String &p_code) {
 					type_curly_stack++;
 					break;
 				} else if (tk == TK_EOF) {
-					error_str = "Expected " + get_token_name(TK_CURLY_BRACKET_OPEN) + " after struct decl, found " + get_token_name(TK_EOF);
+					error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_CURLY_BRACKET_OPEN) + " after struct decl, found " + get_token_name(TK_EOF);
 					error = true;
 					return ERR_PARSE_ERROR;
 				}
@@ -611,7 +707,7 @@ Error ScriptClassParser::parse(const String &p_code) {
 			name_stack[at_level] = name_decl;
 		} else if (tk == TK_IDENTIFIER && String(value) == "namespace") {
 			if (type_curly_stack > 0) {
-				error_str = "Found namespace nested inside type.";
+				error_str = "Line: " + String::num_int64(line) + " - Found namespace nested inside type.";
 				error = true;
 				return ERR_PARSE_ERROR;
 			}
