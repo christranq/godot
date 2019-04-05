@@ -272,6 +272,41 @@ ScriptClassParser::Token ScriptClassParser::get_token() {
 	}
 }
 
+// If the next token is the compare token, returns true. Doesn't consume any tokens.
+bool ScriptClassParser::_try_parse(Token compare) {
+	int temp_idx = idx;
+	int temp_line = line;
+
+	Token tk = get_token();
+
+	idx = temp_idx;
+	line = temp_line;
+
+	return compare == tk;
+}
+
+// If the tokens are the compare tokens, returns true. Doesn't consume any tokens.
+bool ScriptClassParser::_try_parse(Vector<Token> &compare) {
+	int temp_idx = idx;
+	int temp_line = line;
+
+	for (int i = 0; i < compare.size(); i++) {
+		Token tk = get_token();
+
+		if (compare[i] != tk) {
+			idx = temp_idx;
+			line = temp_line;
+
+			return false;
+		}
+	}
+
+	idx = temp_idx;
+	line = temp_line;
+
+	return true;
+}
+
 Error ScriptClassParser::_skip_generic_type_params() {
 
 	Token tk;
@@ -286,7 +321,7 @@ Error ScriptClassParser::_skip_generic_type_params() {
 			Error err = _skip_tuple_type_params();
 			if (err)
 				return err;
-			continue;
+			tk = get_token();
 		} else if (tk == TK_IDENTIFIER) { // Could be a regular type
 			tk = get_token();
 
@@ -310,7 +345,19 @@ Error ScriptClassParser::_skip_generic_type_params() {
 				Error err = _skip_generic_type_params();
 				if (err)
 					return err;
-				continue;
+				tk = get_token();
+			}
+
+			// Skip Array declarations (i.e. List<T[]> or List<int?[]>)
+			while (tk == TK_BRACKET_OPEN) {
+				// Next token MUST be ]
+				tk = get_token();
+				if (tk != TK_BRACKET_CLOSE) {
+					error_str = "Line: " + String::num_int64(line) + " - Expected ] after [. But found " + get_token_name(tk) + " next.";
+					error = true;
+					return ERR_PARSE_ERROR;
+				}
+				tk = get_token();
 			}
 
 			// Type specifications can end with "?" to denote nullable types, such as int?
@@ -321,6 +368,11 @@ Error ScriptClassParser::_skip_generic_type_params() {
 
 		// Type is parsed now.
 		if (tk == TK_OP_GREATER) {
+			// Type specifications can end with "?" to denote nullable types, such as List<int>?
+			if (_try_parse(TK_QUESTION)) {
+				tk = get_token();
+			}
+
 			return OK;
 		} else if (tk == TK_COMMA) {
 			// This is okay, but we're still looking for the end of this generic type, so continue on
@@ -328,7 +380,7 @@ Error ScriptClassParser::_skip_generic_type_params() {
 			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 			error = true;
 			return ERR_PARSE_ERROR;
-		} 
+		}
 	}
 }
 
@@ -346,7 +398,7 @@ Error ScriptClassParser::_skip_tuple_type_params() {
 			Error err = _skip_tuple_type_params();
 			if (err)
 				return err;
-			continue;
+			tk = get_token();
 		} else if (tk == TK_IDENTIFIER) { // Could be a regular type
 			tk = get_token();
 
@@ -370,33 +422,44 @@ Error ScriptClassParser::_skip_tuple_type_params() {
 				Error err = _skip_generic_type_params();
 				if (err)
 					return err;
-				continue;
+				tk = get_token();
+			}
+
+			// Skip Array declarations (i.e. List<T[]> or List<int?[]>)
+			while (tk == TK_BRACKET_OPEN) {
+				// Next token MUST be ]
+				tk = get_token();
+				if (tk != TK_BRACKET_CLOSE) {
+					error_str = "Line: " + String::num_int64(line) + " - Expected ] after [. But found " + get_token_name(tk) + " next.";
+					error = true;
+					return ERR_PARSE_ERROR;
+				}
+				tk = get_token();
 			}
 
 			// Type specifications can end with "?" to denote nullable types, such as int?
 			if (tk == TK_QUESTION) {
 				tk = get_token();
 			}
-
-			// After the type, you can give the tuple a name, such as (int? a, int b)
-			if (tk == TK_IDENTIFIER) {
-				tk = get_token();
-			}
+		} else {
+			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
+			error = true;
+			return ERR_PARSE_ERROR;
 		}
 
 		// Type is parsed now.
 
-		if (tk == TK_PARENS_OPEN) {
-			Error err = _skip_tuple_type_params();
-			if (err)
-				return err;
-			continue;
-		} else if (tk == TK_OP_LESS) {
-			Error err = _skip_generic_type_params();
-			if (err)
-				return err;
-			continue;
-		} else if (tk == TK_PARENS_CLOSE) {
+		// After the type, you can give the tuple a name, such as (int? a, int b)
+		if (tk == TK_IDENTIFIER) {
+			tk = get_token();
+		}
+
+		if (tk == TK_PARENS_CLOSE) {
+			// Type specifications can end with "?" to denote nullable types, such as List<int>?
+			if (_try_parse(TK_QUESTION)) {
+				tk = get_token();
+			}
+
 			return OK;
 		} else if (tk == TK_COMMA) {
 			continue;
@@ -404,7 +467,7 @@ Error ScriptClassParser::_skip_tuple_type_params() {
 			error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
 			error = true;
 			return ERR_PARSE_ERROR;
-		} 
+		}
 	}
 }
 
@@ -420,8 +483,8 @@ Error ScriptClassParser::_parse_type_full_name(String &r_full_name) {
 
 	r_full_name += String(value);
 
-	if (code[idx] == '<') {
-		idx++;
+	if (_try_parse(TK_OP_LESS)) {
+		tk = get_token();
 
 		// We don't mind if the base is generic, but we skip it any ways since this information is not needed
 		Error err = _skip_generic_type_params();
@@ -476,6 +539,7 @@ Error ScriptClassParser::_parse_class_base(Vector<String> &r_base) {
 }
 
 Error ScriptClassParser::_parse_type_constraints() {
+	// Get name
 	Token tk = get_token();
 	if (tk != TK_IDENTIFIER) {
 		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
@@ -483,6 +547,7 @@ Error ScriptClassParser::_parse_type_constraints() {
 		return ERR_PARSE_ERROR;
 	}
 
+	// Get colon
 	tk = get_token();
 	if (tk != TK_COLON) {
 		error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
@@ -492,6 +557,7 @@ Error ScriptClassParser::_parse_type_constraints() {
 
 	while (true) {
 		tk = get_token();
+		// Get type
 		if (tk == TK_IDENTIFIER) {
 			if (String(value) == "where") {
 				return _parse_type_constraints();
@@ -509,23 +575,37 @@ Error ScriptClassParser::_parse_type_constraints() {
 
 				tk = get_token();
 			}
+
+			// Type could be a generic type
+			if (tk == TK_OP_LESS) {
+				Error err = _skip_generic_type_params();
+				if (err)
+					return err;
+				tk = get_token();
+			}
+
+			// Type can end in () (like the type constraint new())
+			if (tk == TK_PARENS_OPEN) {
+				tk = get_token();
+				if (tk != TK_PARENS_CLOSE) {
+					error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
+					error = true;
+					return ERR_PARSE_ERROR;
+				}
+				tk = get_token();
+			}
+		} else {
+			error_str = "Line: " + String::num_int64(line) + " - Expected " + get_token_name(TK_IDENTIFIER) + ", found: " + get_token_name(tk);
+			error = true;
+			return ERR_PARSE_ERROR;
 		}
+
+		// Parsed type at this point
 
 		if (tk == TK_COMMA) {
 			continue;
 		} else if (tk == TK_IDENTIFIER && String(value) == "where") {
 			return _parse_type_constraints();
-		} else if (tk == TK_PARENS_OPEN) {
-			tk = get_token();
-			if (tk != TK_PARENS_CLOSE) {
-				error_str = "Line: " + String::num_int64(line) + " - Unexpected token: " + get_token_name(tk);
-				error = true;
-				return ERR_PARSE_ERROR;
-			}
-		} else if (tk == TK_OP_LESS) {
-			Error err = _skip_generic_type_params();
-			if (err)
-				return err;
 		} else if (tk == TK_CURLY_BRACKET_OPEN) {
 			return OK;
 		} else {
@@ -583,19 +663,16 @@ Error ScriptClassParser::parse(const String &p_code) {
 		// It's possible to use "class" and "struct" as type constraints instead of type declarations, so consume those first
 		if (tk == TK_IDENTIFIER && String(value) == "where") {
 			// However, it's also possible that if we see a "where", it isn't a type constraint
-			int temp_idx = idx;
-			int temp_line = line;
+			Vector<Token> tokens;
+			tokens.push_back(TK_IDENTIFIER);
+			tokens.push_back(TK_COLON);
+			tokens.push_back(TK_IDENTIFIER);
 
-			Token tk1 = get_token();
-			Token tk2 = get_token();
-
-			idx = temp_idx;
-			line = temp_line;
-
-			if (tk1 == TK_IDENTIFIER && tk2 == TK_COLON) {
+			if (_try_parse(tokens)) {
 				Error err = _parse_type_constraints();
 				if (err)
 					return err;
+				tk = get_token();
 			}
 		} else if (tk == TK_IDENTIFIER && String(value) == "class") {
 			tk = get_token();

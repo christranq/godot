@@ -94,6 +94,9 @@ private:
 
 	Token get_token();
 
+	bool _try_parse(Token compare);
+	bool _try_parse(Vector<Token> &compare);
+
 	Error _skip_generic_type_params();
 	Error _skip_tuple_type_params();
 
